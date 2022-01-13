@@ -127,8 +127,9 @@ class VideoWindow(QMainWindow):
             self.save_frame()
 
     def save_frame(self):
-        self.mediaPlayer.pause()
+        self.grabber = VideoFrameGrabber(self.videoWidget, self)
         self.mediaPlayer.setVideoOutput(self.grabber)
+        self.mediaPlayer.pause()
         self._grabbing = True
         self.grabber.frameAvailable.connect(self.process_frame)
 
