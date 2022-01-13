@@ -83,8 +83,8 @@ class VideoWindow(QMainWindow):
 
         # Set widget to contain window contents
         wid.setLayout(layout)
-
-        self.mediaPlayer.setVideoOutput(self.videoWidget)
+        self.grabber = VideoFrameGrabber(self)
+        self.mediaPlayer.setVideoOutput([self.videoWidget.videoSurface(), self.grabber])
         self.mediaPlayer.stateChanged.connect(self.mediaStateChanged)
         self.mediaPlayer.positionChanged.connect(self.positionChanged)
         self.mediaPlayer.durationChanged.connect(self.durationChanged)
@@ -105,8 +105,7 @@ class VideoWindow(QMainWindow):
 
         self.video_name = None
         self.video_path = None
-        self.grabber = VideoFrameGrabber(self.videoWidget, self)
-        self._grabbing = False
+        self.grabber.frameAvailable.connect(self.process_frame)
 
     def openFile(self):
         fileName, _ = QFileDialog.getOpenFileName(self, "Open Movie", QDir.homePath())
@@ -124,22 +123,13 @@ class VideoWindow(QMainWindow):
 
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key_S:
-            self.save_frame()
+            self.grabber.save_image()
 
-    def save_frame(self):
-        self.grabber = VideoFrameGrabber(self.videoWidget, self)
-        self.mediaPlayer.setVideoOutput(self.grabber)
-        self.mediaPlayer.pause()
-        self._grabbing = True
-        self.grabber.frameAvailable.connect(self.process_frame)
-
-    def process_frame(self, frame: QImage):
+    def process_frame(self, frame: QImage, timestamp: int):
         if not os.path.exists(self.folder.file.text()):
             os.mkdir(self.folder.file.text())
-        t_milliseconds = self.mediaPlayer.position()
-        file_name = f'{self.folder.file.text()}/{t_milliseconds}.png'
+        file_name = f'{self.folder.file.text()}/{timestamp}.png'
         frame.save(file_name)
-        self.play()
 
     def exitCall(self):
         sys.exit(app.exec_())
@@ -149,9 +139,6 @@ class VideoWindow(QMainWindow):
             self.mediaPlayer.pause()
         else:
             self.mediaPlayer.play()
-            if self._grabbing:
-                self.mediaPlayer.setVideoOutput(self.videoWidget)
-                self._grabbing = False
 
     def slow_down(self):
         self._current_playbackrate = self._current_playbackrate * 0.5
@@ -189,12 +176,12 @@ class VideoWindow(QMainWindow):
 
 class VideoFrameGrabber(QAbstractVideoSurface):
     """ From https://stackoverflow.com/questions/55349153/pyqt5-grabbing-current-frame-displays-blank"""
-    frameAvailable = pyqtSignal(QImage)
+    frameAvailable = pyqtSignal(QImage, int)
 
-    def __init__(self, widget: QWidget, parent: QObject):
+    def __init__(self, parent: QObject = None):
         super().__init__(parent)
+        self._grab_frame = False
 
-        self.widget = widget
     def supportedPixelFormats(self, handleType):
         return [QVideoFrame.Format_ARGB32, QVideoFrame.Format_ARGB32_Premultiplied,
                 QVideoFrame.Format_RGB32, QVideoFrame.Format_RGB24, QVideoFrame.Format_RGB565,
@@ -209,83 +196,19 @@ class VideoFrameGrabber(QAbstractVideoSurface):
                 QVideoFrame.Format_IMC4, QVideoFrame.Format_Y8, QVideoFrame.Format_Y16,
                 QVideoFrame.Format_Jpeg, QVideoFrame.Format_CameraRaw, QVideoFrame.Format_AdobeDng]
 
-    def isFormatSupported(self, format):
-        imageFormat = QVideoFrame.imageFormatFromPixelFormat(format.pixelFormat())
-        size = format.frameSize()
-
-        return imageFormat != QImage.Format_Invalid and not size.isEmpty() and \
-               format.handleType() == QAbstractVideoBuffer.NoHandle
-
-    def start(self, format: QVideoSurfaceFormat):
-        imageFormat = QVideoFrame.imageFormatFromPixelFormat(format.pixelFormat())
-        size = format.frameSize()
-
-        if imageFormat != QImage.Format_Invalid and not size.isEmpty():
-            self.imageFormat = imageFormat
-            self.imageSize = size
-            self.sourceRect = format.viewport()
-
-            super().start(format)
-
-            self.widget.updateGeometry()
-            self.updateVideoRect()
-
-            return True
-        else:
-            return False
-
-    def stop(self):
-        self.currentFrame = QVideoFrame()
-        self.targetRect = QRect()
-
-        super().stop()
-
-        self.widget.update()
-
-    def present(self, frame):
+    def present(self, frame: QVideoFrame):
         if frame.isValid():
-            cloneFrame = QVideoFrame(frame)
-            cloneFrame.map(QAbstractVideoBuffer.ReadOnly)
-            image = QImage(cloneFrame.bits(), cloneFrame.width(), cloneFrame.height(),
-                           QVideoFrame.imageFormatFromPixelFormat(cloneFrame.pixelFormat()))
-            self.frameAvailable.emit(image)  # this is very important
-            cloneFrame.unmap()
+            frame = QVideoFrame(frame)
+            frame.map(QAbstractVideoBuffer.ReadOnly)
+            image = QImage(frame.bits(), frame.width(), frame.height(),
+                           QVideoFrame.imageFormatFromPixelFormat(frame.pixelFormat()))
+            if self._grab_frame:
+                self.frameAvailable.emit(image, frame.startTime())  # this is very important
+                self._grab_frame = False
+        return True
 
-        if self.surfaceFormat().pixelFormat() != frame.pixelFormat() or \
-                self.surfaceFormat().frameSize() != frame.size():
-            self.setError(QAbstractVideoSurface.IncorrectFormatError)
-            self.stop()
-
-            return False
-        else:
-            self.currentFrame = frame
-            self.widget.repaint(self.targetRect)
-
-            return True
-
-    def updateVideoRect(self):
-        size = self.surfaceFormat().sizeHint()
-        size.scale(self.widget.size().boundedTo(size), Qt.KeepAspectRatio)
-
-        self.targetRect = QRect(QPoint(0, 0), size)
-        self.targetRect.moveCenter(self.widget.rect().center())
-
-    def paint(self, painter):
-        if self.currentFrame.map(QAbstractVideoBuffer.ReadOnly):
-            oldTransform = self.painter.transform()
-
-        if self.surfaceFormat().scanLineDirection() == QVideoSurfaceFormat.BottomToTop:
-            self.painter.scale(1, -1)
-            self.painter.translate(0, -self.widget.height())
-
-        image = QImage(self.currentFrame.bits(), self.currentFrame.width(), self.currentFrame.height(),
-                       self.currentFrame.bytesPerLine(), self.imageFormat)
-
-        self.painter.drawImage(self.targetRect, image, self.sourceRect)
-
-        self.painter.setTransform(oldTransform)
-
-        self.currentFrame.unmap()
+    def save_image(self):
+        self._grab_frame = True
 
 
 class FolderSelector(QWidget):
