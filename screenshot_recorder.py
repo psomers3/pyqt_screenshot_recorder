@@ -126,12 +126,14 @@ class VideoWindow(QMainWindow):
             self.grabber.save_image()
 
     def process_frame(self, frame: QImage, timestamp: int):
+        is_playing = self.mediaPlayer.state()
         self.mediaPlayer.pause()
         if not os.path.exists(self.folder.file.text()):
             os.mkdir(self.folder.file.text())
         file_name = f'{self.folder.file.text()}/{timestamp}.png'
         frame.save(file_name)
-        self.mediaPlayer.play()
+        if is_playing == QMediaPlayer.PlayingState:
+            self.mediaPlayer.play()
 
     def exitCall(self):
         sys.exit(app.exec_())
