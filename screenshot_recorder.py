@@ -111,6 +111,7 @@ class VideoWindow(QMainWindow):
         fileName, _ = QFileDialog.getOpenFileName(self, "Open Movie", QDir.homePath())
 
         if fileName != '':
+            self.mediaPlayer.stop()
             self.mediaPlayer.setMedia(QMediaContent(QUrl.fromLocalFile(fileName)))
             self.playButton.setEnabled(True)
             self.speedupButton.setEnabled(True)
@@ -128,9 +129,9 @@ class VideoWindow(QMainWindow):
     def process_frame(self, frame: QImage, timestamp: int):
         is_playing = self.mediaPlayer.state()
         self.mediaPlayer.pause()
-        if not os.path.exists(self.folder.file.text()):
-            os.mkdir(self.folder.file.text())
-        file_name = f'{self.folder.file.text()}/{timestamp}.png'
+        if not os.path.exists(self.folder.get_path()):
+            os.mkdir(self.folder.get_path())
+        file_name = f'{self.folder.get_path()}/{timestamp}.png'
         frame.save(file_name)
         if is_playing == QMediaPlayer.PlayingState:
             self.mediaPlayer.play()
@@ -204,8 +205,7 @@ class VideoFrameGrabber(QAbstractVideoSurface):
         if frame.isValid():
             frame = QVideoFrame(frame)
             frame.map(QAbstractVideoBuffer.ReadOnly)
-            image = QImage(frame.bits(), frame.width(), frame.height(),
-                           QVideoFrame.imageFormatFromPixelFormat(frame.pixelFormat()))
+            image = QImage(frame.bits(), frame.width(), frame.height(), frame.bytesPerLine(), QVideoFrame.imageFormatFromPixelFormat(frame.pixelFormat()))
             if self._grab_frame:
                 self.frameAvailable.emit(image, frame.startTime())  # this is very important
                 self._grab_frame = False
