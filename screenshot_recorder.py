@@ -5,10 +5,79 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
 import os
 import sys
+import shutil
+from subprocess import Popen, PIPE, STDOUT
+import re
+
+
+class NoFFMPEG(QMessageBox):
+    def __init__(self):
+        super(NoFFMPEG, self).__init__()
+        self.setText("WARNING: ffmpeg has not been found. Please install it to be able to create a de-interlaced "
+                     "version of this video.")
+
+
+class VideoConverter(QObject):
+    update_status = pyqtSignal(int)
+    started = pyqtSignal()
+    finished = pyqtSignal(str)
+    set_duration = pyqtSignal(int)
+
+    def __init__(self):
+        #  TODO: add relative directory that may have ffmpeg so that it can be packaged with this script
+        super(VideoConverter, self).__init__()
+        self.time_regex = re.compile('.*time=(\d+):(\d+):(\d+).(\d+).*')
+        self.loading_bar = QProgressBar()
+        self.loading_bar.setWindowTitle("Converting to mp4 with deinterlacing")
+        self.loading_bar.setMinimum(0)
+        self.loading_bar.setWindowFlag(Qt.WindowStaysOnTopHint)
+        self.loading_bar.resize(500, 25)
+        self.update_status.connect(self.loading_bar.setValue)
+        self.started.connect(self.loading_bar.show)
+        self.finished.connect(lambda x: self.loading_bar.hide())
+        self.set_duration.connect(self.loading_bar.setMaximum)
+        self._thread = QThread()
+        self.moveToThread(self._thread)
+        self._thread.start()
+
+    @pyqtSlot(str, int)
+    def do_conversion(self, video_file: str, duration: int) -> None:
+        check = shutil.which('ffmpeg')
+        if not check:
+            NoFFMPEG().exec_()
+            return
+
+        filename = os.path.basename(video_file)
+        new_name = f'{os.path.splitext(filename)[0]}_conv.mp4'
+        new_filepath = os.path.join(os.path.dirname(video_file), new_name)
+        p = Popen(["ffmpeg", "-i", video_file, '-vf', 'yadif', new_filepath],
+                  stdout=PIPE,
+                  stderr=STDOUT)
+        output = iter(lambda: p.stdout.read(1).decode('ascii'), str)
+        buffer = ''
+        self.set_duration.emit(duration)
+        self.started.emit()
+        while p.poll() is None:
+            c = next(output)
+            if c != '\r':
+                buffer += c
+            else:
+                timestamp = re.findall(self.time_regex, buffer)
+                if timestamp:
+                    timestamp = timestamp[0]
+                    h = float(timestamp[0])
+                    m = float(timestamp[1])
+                    s = float(timestamp[2]) + float(timestamp[3])/100
+                    ms = int(h*60*60*1000 + m*60*1000 + s*1000)
+                    self.update_status.emit(ms)
+                buffer = ''
+        self.finished.emit(new_filepath)
 
 
 class VideoWindow(QMainWindow):
     """ From https://pythonprogramminglanguage.com/pyqt5-video-widget/"""
+    start_conversion = pyqtSignal(str, int)
+
     def __init__(self, parent=None):
         super(VideoWindow, self).__init__(parent)
         self.setWindowTitle("Screenshot Recorder")
@@ -47,7 +116,10 @@ class VideoWindow(QMainWindow):
         openAction = QAction(QIcon('open.png'), '&Open', self)        
         openAction.setShortcut('Ctrl+O')
         openAction.setStatusTip('Open movie')
-        openAction.triggered.connect(self.openFile)
+        openAction.triggered.connect(self.open_file)
+
+        convertAction = QAction("Create deinterlaced video", self)
+        convertAction.triggered.connect(self.convert_video)
 
         # Create exit action
         exitAction = QAction(QIcon('exit.png'), '&Exit', self)        
@@ -58,8 +130,8 @@ class VideoWindow(QMainWindow):
         # Create menu bar and add action
         menuBar = self.menuBar()
         fileMenu = menuBar.addMenu('&File')
-        #fileMenu.addAction(newAction)
         fileMenu.addAction(openAction)
+        fileMenu.addAction(convertAction)
         fileMenu.addAction(exitAction)
 
         # Create a widget for window contents
@@ -105,21 +177,33 @@ class VideoWindow(QMainWindow):
 
         self.video_name = None
         self.video_path = None
+        self.file_name = ''
         self.grabber.frameAvailable.connect(self.process_frame)
+        self.converter = VideoConverter()
+        self.start_conversion.connect(self.converter.do_conversion)
+        self.converter.finished.connect(self.open_file)
 
-    def openFile(self):
-        fileName, _ = QFileDialog.getOpenFileName(self, "Open Movie", QDir.homePath())
+    def convert_video(self):
+        if not self.file_name:
+            return
+        self.start_conversion.emit(self.file_name, self.mediaPlayer.duration())
 
-        if fileName != '':
+    def open_file(self, vid_file: str = None):
+        if vid_file:
+            file_name = vid_file
+        else:
+            file_name, _ = QFileDialog.getOpenFileName(self, "Open Movie", QDir.homePath())
+        self.file_name = file_name
+        if file_name != '':
             self.mediaPlayer.stop()
-            self.mediaPlayer.setMedia(QMediaContent(QUrl.fromLocalFile(fileName)))
+            self.mediaPlayer.setMedia(QMediaContent(QUrl.fromLocalFile(file_name)))
             self.playButton.setEnabled(True)
             self.speedupButton.setEnabled(True)
             self.slowdownButton.setEnabled(True)
             self.normspeedButton.setEnabled(True)
             self._current_playbackrate = 1
-            self.video_name = os.path.splitext(os.path.basename(fileName))[0]
-            self.video_path = f'{os.path.dirname(fileName)}/{self.video_name}'
+            self.video_name = os.path.splitext(os.path.basename(file_name))[0]
+            self.video_path = f'{os.path.dirname(file_name)}/{self.video_name}'
             self.folder.file.setText(self.video_path)
 
     def keyPressEvent(self, event: QKeyEvent):
@@ -227,7 +311,7 @@ class FolderSelector(QWidget):
         self.setLayout(QHBoxLayout())
         self.file = QLineEdit()
         self.file.setMinimumWidth(500)
-        self.file.setPlaceholderText('C:\\\\Path\\to\\where_videos\\will_be_saved\\')
+        self.file.setPlaceholderText('C:\\\\Path\\to\\where_images\\will_be_saved\\')
         self.find_btn = QPushButton('Select Folder')
         self.find_btn.clicked.connect(self.select_folder)
         self.layout().addWidget(self.file)
