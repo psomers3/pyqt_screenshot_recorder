@@ -118,8 +118,9 @@ class VideoWindow(QMainWindow):
         openAction.setStatusTip('Open movie')
         openAction.triggered.connect(self.open_file)
 
-        convertAction = QAction("Create deinterlaced video", self)
-        convertAction.triggered.connect(self.convert_video)
+        self.convertAction = QAction("Create deinterlaced video", self)
+        self.convertAction.triggered.connect(self.convert_video)
+        self.convertAction.setEnabled(False)
 
         # Create exit action
         exitAction = QAction(QIcon('exit.png'), '&Exit', self)        
@@ -131,7 +132,7 @@ class VideoWindow(QMainWindow):
         menuBar = self.menuBar()
         fileMenu = menuBar.addMenu('&File')
         fileMenu.addAction(openAction)
-        fileMenu.addAction(convertAction)
+        fileMenu.addAction(self.convertAction)
         fileMenu.addAction(exitAction)
 
         # Create a widget for window contents
@@ -205,6 +206,7 @@ class VideoWindow(QMainWindow):
             self.video_name = os.path.splitext(os.path.basename(file_name))[0]
             self.video_path = f'{os.path.dirname(file_name)}/{self.video_name}'
             self.folder.file.setText(self.video_path)
+            self.convertAction.setEnabled(True)
 
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key_S:
