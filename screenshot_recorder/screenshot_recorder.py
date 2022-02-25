@@ -8,6 +8,8 @@ import sys
 import shutil
 from subprocess import Popen, PIPE, STDOUT
 import re
+sys.path = [os.path.join(os.path.dirname(__file__), 'ffmpeg')] + sys.path
+os.environ['PATH'] = ';'.join(sys.path)
 
 
 class NoFFMPEG(QMessageBox):
@@ -22,6 +24,7 @@ class VideoConverter(QObject):
     started = pyqtSignal()
     finished = pyqtSignal(str)
     set_duration = pyqtSignal(int)
+    no_ffmpeg = pyqtSignal()
 
     def __init__(self):
         #  TODO: add relative directory that may have ffmpeg so that it can be packaged with this script
@@ -39,12 +42,14 @@ class VideoConverter(QObject):
         self._thread = QThread()
         self.moveToThread(self._thread)
         self._thread.start()
+        self.no_ffmpeg_warning = NoFFMPEG()
+        self.no_ffmpeg.connect(self.no_ffmpeg_warning.exec)
 
     @pyqtSlot(str, int)
     def do_conversion(self, video_file: str, duration: int) -> None:
         check = shutil.which('ffmpeg')
         if not check:
-            NoFFMPEG().exec_()
+            self.no_ffmpeg.emit()
             return
 
         filename = os.path.basename(video_file)
@@ -223,7 +228,7 @@ class VideoWindow(QMainWindow):
             self.mediaPlayer.play()
 
     def exitCall(self):
-        sys.exit(app.exec_())
+        self.close()
 
     def play(self):
         if self.mediaPlayer.state() == QMediaPlayer.PlayingState:
@@ -332,11 +337,3 @@ class FolderSelector(QWidget):
         :return: the text in the LineEdit
         """
         return self.file.text()
-
-
-if __name__ == '__main__':
-    app = QApplication(sys.argv)
-    player = VideoWindow()
-    player.resize(640, 480)
-    player.show()
-    sys.exit(app.exec_())
